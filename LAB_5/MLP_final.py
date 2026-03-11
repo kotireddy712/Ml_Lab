@@ -1,0 +1,372 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.preprocessing import OneHotEncoder, LabelEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report, confusion_matrix
+
+# 1. ACTIVATION FUNCTIONS ..
+
+class Activation:
+
+    def relu(z):
+        return np.maximum(0, z)
+
+    def relu_der(z):
+        return np.where(z > 0, 1, 0)
+
+    def sigmoid(z):
+        return 1/(1+np.exp(-z))
+
+    def sigmoid_der(z):
+        s = 1/(1+np.exp(-z))
+        return s*(1-s)
+
+    def tanh(z):
+        return np.tanh(z)
+
+    def tanh_der(z):
+        return 1 - np.tanh(z)**2
+
+    def softmax(z):
+        z = z - np.max(z,axis=1,keepdims=True)
+        exp = np.exp(z)
+        return exp/np.sum(exp,axis=1,keepdims=True)
+
+# 2. LOSS FUCNTIONS ( CCE FOR multi-class, BCE FOR binary classfic.)
+
+class Loss:
+
+    def binary_cross_entropy(y, y_pred):
+        eps = 1e-9
+        return -np.mean(
+            y*np.log(y_pred+eps) + (1-y)*np.log(1-y_pred+eps)
+        )
+    
+    def categorical_cross_entropy(y, y_pred):
+        eps = 1e-9
+        return -np.mean(
+            np.sum(y*np.log(y_pred+eps), axis=1)
+        )
+    
+class MLP:
+
+    def __init__(self, layer_sizes, activations, lr=0.01):
+        self.layer_sizes = layer_sizes
+        self.activations = activations
+        self.lr = lr
+        self.L = len(layer_sizes)-1
+        self.W=[]
+        self.b=[]
+        for i in range(self.L):
+            w = np.random.randn(layer_sizes[i],layer_sizes[i+1]) * np.sqrt(2/layer_sizes[i])
+            b = np.zeros((1,layer_sizes[i+1]))
+            self.W.append(w)
+            self.b.append(b)
+
+    def forward(self,X):
+        self.A=[X]
+        self.Z=[]
+        for i in range(self.L):
+            z = self.A[-1] @ self.W[i] + self.b[i]
+            self.Z.append(z)
+            a = self.activations[i]["func"](z)
+            self.A.append(a)
+
+        return self.A[-1]
+
+    def backward(self,y):
+        m = y.shape[0]
+        dA = self.A[-1] - y
+        for i in reversed(range(self.L)): # reverseing == (L-1) --> (0)
+            act = self.activations[i]
+            if act["name"]=="softmax":
+                dZ = dA
+            else:
+                dZ = dA * act["der"](self.Z[i])
+
+            dW = self.A[i].T @ dZ / m
+            db = np.sum(dZ,axis=0,keepdims=True)/m
+            dA = dZ @ self.W[i].T
+            self.W[i] -= self.lr*dW
+            self.b[i] -= self.lr*db
+
+    def train(self,X,y,epochs,batch_size):
+        losses=[]
+        for epoch in range(epochs):
+            idx = np.random.permutation(len(X)) # If the data is not shuffled, the batches will always contain the same samples in the same order.
+            X_shuff = X[idx] # X_shuff copy to new..
+            y_shuff = y[idx]
+            for start in range(0,len(X),batch_size):
+                end = start+batch_size
+                Xb = X_shuff[start:end]
+                yb = y_shuff[start:end]
+                self.forward(Xb)
+                self.backward(yb)
+
+            pred = self.forward(X)
+            loss = Loss.categorical_cross_entropy(y,pred)
+            losses.append(loss)
+        return losses
+
+    def predict(self,X):
+        y = self.forward(X)
+        return np.argmax(y,axis=1) # retrun the indices np.array which indice has max.value,.
+
+# 5. Load and Encode Dataset
+columns = ["buying","maint","doors","persons","lug_boot","safety","output"]
+
+df = pd.read_csv("car_data.csv",names=columns)
+
+X = df.drop("output",axis=1)
+y = df["output"]
+
+feature_encoder = OneHotEncoder(sparse_output=False)
+X_encoded = feature_encoder.fit_transform(X)
+
+label_encoder = LabelEncoder()
+y_encoded = label_encoder.fit_transform(y)
+
+y_onehot = np.eye(len(np.unique(y_encoded)))[y_encoded]
+
+# 6. Train / Validation / Test Split
+X_trainval,X_test,y_trainval,y_test = train_test_split(
+    X_encoded,y_onehot,test_size=0.2,stratify=y_encoded)
+
+X_train,X_val,y_train,y_val = train_test_split(
+    X_trainval,y_trainval,test_size=0.25,
+    stratify=np.argmax(y_trainval,axis=1))
+
+# 7. Base Model + Metrics
+layers=[X_train.shape[1],16,16,y_train.shape[1]] # here 16,16 define 2-hidden layers of wihcihc each has 16-neurons
+
+    # here we pre-defined in each layer what to use above 2-hidden and 1-output given :: so, now :: thier act.fucntions in each layer is dfinedhere ::
+activations=[
+{"name":"relu","func":Activation.relu,"der":Activation.relu_der},
+{"name":"relu","func":Activation.relu,"der":Activation.relu_der},
+{"name":"softmax","func":Activation.softmax,"der":None}
+]
+
+# IF WE WANNNA CHANGE IONPUT-LAYERS OR NO.OF.NODES :: just chnage here in both "" LAYERS + ACTIVATIONS" -- thats's it ..
+
+nn = MLP(layers,activations,lr=0.01)
+
+nn.train(X_train,y_train,epochs=3000,batch_size=32)
+
+y_pred = nn.predict(X_test)
+y_true = np.argmax(y_test,axis=1)
+
+print(classification_report(y_true,y_pred))
+
+# 8. Optimal Hidden Layers Experiment -------------------------------------
+hidden_options=[[16],[16,16],[16,16,16],[16,16,16,16]]
+train_loss=[]
+val_loss=[]
+
+for hidden in hidden_options:
+    layers = [X_train.shape[1]] + hidden + [y_train.shape[1]] # layers = [21] + [16,16] + [4] ==>> layers = [21,16,16,4]
+    activations = []
+    # hidden layers → ReLU
+    for _ in hidden:
+        activations.append({
+            "name":"relu",
+            "func":Activation.relu,
+            "der":Activation.relu_der
+        })
+    # output layer → Softmax
+    activations.append({
+        "name":"softmax",
+        "func":Activation.softmax,
+        "der":None
+    })
+    #train..
+    nn = MLP(layers, activations, lr=0.01)
+    nn.train(X_train, y_train, epochs=2000, batch_size=32)
+    # training loss
+    train_pred = nn.forward(X_train) # here we need raw-prob.of y^ in categorical loss, so :: using forward..
+    t_loss = Loss.categorical_cross_entropy(y_train, train_pred)
+    # validation loss
+    val_pred = nn.forward(X_val)
+    v_loss = Loss.categorical_cross_entropy(y_val, val_pred)
+    train_loss.append(t_loss)
+    val_loss.append(v_loss)
+# -------------------------------------------------------------now plots --------------------
+num_layers = [1,2,3,4]
+
+plt.plot(num_layers, train_loss, marker='o', label="Train Loss")
+plt.plot(num_layers, val_loss, marker='o', label="Validation Loss")
+
+plt.xlabel("Number of Hidden Layers")
+plt.ylabel("Loss")
+plt.title("Loss vs Hidden Layers")
+
+plt.legend()
+plt.show()
+# =-----finding Now find the index of minimum validation loss.#------------
+best_idx = np.argmin(val_loss)
+best_hidden = hidden_options[best_idx]
+#----------------------------------------------------------------
+# 9. 9. Optimal Hidden Nodes Experiment (in each layer how amny nodes)- Now keep hidden layers fixed.
+# num_hidden = len(best_hidden)
+# nodes=[4,8,16,32,64]
+# train_loss=[]
+# val_loss=[]
+
+# for n in nodes:
+#     # layers = [X_train.shape[1], n, n, y_train.shape[1]]
+#     layers = [X_train.shape[1]] + [n]*num_hidden + [y_train.shape[1]] ##**
+#     # activations = [
+#     #     {"name":"relu","func":Activation.relu,"der":Activation.relu_der},
+#     #     {"name":"relu","func":Activation.relu,"der":Activation.relu_der},
+#     #     {"name":"softmax","func":Activation.softmax,"der":None}
+#     # ]
+#     activations = []
+#     for _ in range(num_hidden):
+#         activations.append({
+#         "name":"relu",
+#         "func":Activation.relu,
+#         "der":Activation.relu_der
+#         })
+#     activations.append({
+#     "name":"softmax",
+#     "func":Activation.softmax,
+#     "der":None
+#     })
+#     nn = MLP(layers, activations, lr=0.01)
+#     nn.train(X_train, y_train, epochs=2000, batch_size=32)
+#     # train-loss
+#     train_pred = nn.forward(X_train)
+#     t_loss = Loss.categorical_cross_entropy(y_train, train_pred)
+#     # vald.loss
+#     val_pred = nn.forward(X_val)
+#     v_loss = Loss.categorical_cross_entropy(y_val, val_pred)
+#     #-----
+#     train_loss.append(t_loss)
+#     val_loss.append(v_loss)
+nodes=[4,8,16,32,64]
+train_loss=[]
+val_loss=[]
+
+num_hidden = len(best_hidden)
+
+for n in nodes:
+    layers = [X_train.shape[1]] + [n]*num_hidden + [y_train.shape[1]]
+    activations=[]
+    for _ in range(num_hidden):
+        activations.append({
+            "name":"relu",
+            "func":Activation.relu,
+            "der":Activation.relu_der
+        })
+    activations.append({
+        "name":"softmax",
+        "func":Activation.softmax,
+        "der":None
+    })
+
+    nn = MLP(layers, activations, lr=0.01)
+    nn.train(X_train, y_train, epochs=2000, batch_size=32)
+
+    train_pred = nn.forward(X_train)
+    t_loss = Loss.categorical_cross_entropy(y_train, train_pred)
+
+    val_pred = nn.forward(X_val)
+    v_loss = Loss.categorical_cross_entropy(y_val, val_pred)
+
+    train_loss.append(t_loss)
+    val_loss.append(v_loss)
+#-------------- # plotting for no.of.optimal nodes after fixing layers #----
+plt.plot(nodes, train_loss, marker='o', label="Train Loss")
+plt.plot(nodes, val_loss, marker='o', label="Validation Loss")
+
+plt.xlabel("Hidden Nodes")
+plt.ylabel("Loss")
+plt.title("Loss vs Hidden Nodes")
+
+plt.legend()
+plt.show()
+# 2. Find the best node count-----------
+best_idx = np.argmin(val_loss)
+best_nodes = nodes[best_idx]
+#----------------------------------#-------------------------
+### Final Model with Optimal Architecture
+hidden_structure = [best_nodes] * len(best_hidden)
+# layers=[X_trainval.shape[1],16,16,y_trainval.shape[1]]
+layers = [X_trainval.shape[1]] + hidden_structure + [y_trainval.shape[1]]
+# activations=[
+# {"name":"relu","func":Activation.relu,"der":Activation.relu_der},
+# {"name":"relu","func":Activation.relu,"der":Activation.relu_der},
+# {"name":"softmax","func":Activation.softmax,"der":None}
+# ]
+activations = []
+for _ in hidden_structure:
+    activations.append({
+        "name":"relu",
+        "func":Activation.relu,
+        "der":Activation.relu_der
+    })
+activations.append({
+    "name":"softmax",
+    "func":Activation.softmax,
+    "der":None
+})
+
+nn_final = MLP(layers,activations,lr=0.01)
+nn_final.train(X_trainval,y_trainval,epochs=3000,batch_size=32)
+
+y_pred = nn_final.predict(X_test)
+y_true = np.argmax(y_test,axis=1)
+
+print(classification_report(y_true,y_pred))
+
+#---------------------------
+batch_sizes = [1,10,50,100]
+loss_curves = {}
+
+for b in batch_sizes:
+    nn = MLP(layers, activations, lr=0.01)
+    losses = nn.train(X_train, y_train, epochs=200, batch_size=b)
+    loss_curves[b] = losses
+
+for b in batch_sizes:
+    plt.plot(loss_curves[b], label=f"Batch size {b}")
+
+plt.xlabel("Epochs")
+plt.ylabel("Training Loss")
+plt.title("Training Loss vs Epochs for Different Batch Sizes")
+
+plt.legend()
+
+#---------# in optimal nodes we cna get losses from directly itself from tatin fucnt..--
+losses = nn.train(X_train, y_train, epochs=2000, batch_size=32)
+t_loss = losses[-1] # -1 == I.M.P..
+
+# -- final version code ..
+nn = MLP(layers, activations, lr=0.01)
+losses = nn.train(X_train, y_train, epochs=2000, batch_size=32)
+
+t_loss = losses[-1]   # final training loss
+# we should do fu**ing train again using val-dataset so be clear .. use updated wieghted from tarianing dtas sitself ..
+val_pred = nn.forward(X_val)
+v_loss = Loss.categorical_cross_entropy(y_val, val_pred)
+
+train_loss.append(t_loss)
+val_loss.append(v_loss)
+
+# ------------------------
+# SOME TIMES, they ask to remove some rows conataing as last column as some value how 
+
+# Sometimes datasets contain NaN.
+df = df.dropna()
+
+# Remove rows where age is missing:
+df = df.dropna(subset=["age"])
+
+# Remove rows where city = "Delhi"
+df = df[df["city"] != "Delhi"]
+
+# Remove Rows With Multiple Values
+#  1. Example: remove rows where city is Delhi or Chennai
+df = df[~df["city"].isin(["Delhi", "Chennai"])]
