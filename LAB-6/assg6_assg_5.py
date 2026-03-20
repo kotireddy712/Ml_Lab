@@ -1,3 +1,31 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.svm import SVC
+from sklearn.inspection import DecisionBoundaryDisplay
+
+X = np.array([[0,0],[0,1],[1,0],[1,1]])
+y = np.array([0,0,0,1])
+
+model = SVC(kernel="linear")
+model.fit(X,y)
+
+fig, ax = plt.subplots()
+
+DecisionBoundaryDisplay.from_estimator(model, X, ax=ax)
+
+ax.scatter(X[:,0], X[:,1], c=y)
+
+xx, yy = np.meshgrid(np.linspace(-0.5,1.5,100),
+                     np.linspace(-0.5,1.5,100))
+
+Z = model.decision_function(np.c_[xx.ravel(), yy.ravel()])
+Z = Z.reshape(xx.shape)
+
+ax.contour(xx, yy, Z, levels=[-1,0,1])
+
+ax.scatter(model.support_vectors_[:,0], model.support_vectors_[:,1])
+
+plt.show()
 # -*- coding: utf-8 -*-
 """Assg6_SVM.ipynb
 
